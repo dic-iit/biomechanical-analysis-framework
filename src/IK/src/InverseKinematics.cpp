@@ -83,7 +83,8 @@ bool HumanIK::initialize(std::weak_ptr<const BipedalLocomotion::ParametersHandle
         // Check that the length of the joint positions is correct
         if (calibrationJointPositions.size() != m_kinDyn->getNrOfDegreesOfFreedom())
         {
-            BiomechanicalAnalysis::log()->warn("{} Calibration joint positions vector has wrong size, setting all joints to zero", logPrefix);
+            BiomechanicalAnalysis::log()->warn("{} Calibration joint positions vector has wrong size, setting all joints to zero",
+                                               logPrefix);
             m_calibrationJointPositions.setZero();
         } else
         {
@@ -506,7 +507,8 @@ bool HumanIK::advance()
         Eigen::Matrix4d basePose; // Pose of the base
         Eigen::VectorXd initialJointPositions; // Initial positions of the joints
         basePose.setIdentity(); // Set the base pose to the identity matrix
-        m_system.dynamics->setState({basePose.topRightCorner<3, 1>(), toManifRot(basePose.topLeftCorner<3, 3>()), m_calibrationJointPositions});
+        m_system.dynamics->setState(
+            {basePose.topRightCorner<3, 1>(), toManifRot(basePose.topLeftCorner<3, 3>()), m_calibrationJointPositions});
         m_tPose = false;
     }
 
@@ -889,6 +891,53 @@ bool HumanIK::initializeJointRegularizationTask(const std::string& taskName,
     // Create a weight vector with constant values based on the weight parameter
     Eigen::VectorXd weightVector(m_kinDyn->getNrOfDegreesOfFreedom());
     weightVector.setConstant(weight);
+
+    std::vector<std::string> jointsList;
+    if (taskHandler->getParameter("joints_list", jointsList))
+    {
+        std::vector<double> Jointsweights;
+        if (!taskHandler->getParameter("joints_weights", Jointsweights))
+        {
+            BiomechanicalAnalysis::log()->error("[HumanIK::initializeJointRegularizationTask] "
+                                                "Parameter 'joints_weights' of the {} task is missing; this parameter is only ",
+                                                "required if 'joints_list' is provided. Please provide the 'joints_weights' parameter",
+                                                "or remove the 'joints_list' parameter from the {} task",
+                                                taskName);
+            return false;
+        }
+        if (jointsList.size() != Jointsweights.size())
+        {
+            BiomechanicalAnalysis::log()->error("[HumanIK::initializeJointRegularizationTask] "
+                                                "The size of the parameter 'joints_weights' of the {} "
+                                                "task is {}, it should be equal to the size of the "
+                                                "parameter 'joints_list' that is {}",
+                                                taskName,
+                                                Jointsweights.size(),
+                                                jointsList.size());
+            return false;
+        }
+        for (int i = 0; i < jointsList.size(); i++)
+        {
+            auto index = m_kinDyn->model().getJointIndex(jointsList[i]);
+            if (!m_kinDyn->model().isValidJointIndex(index))
+            {
+                BiomechanicalAnalysis::log()->error("[HumanIK::initializeJointRegularizationTask] "
+                                                    "Joint {} is not present in the model",
+                                                    jointsList[i]);
+                return false;
+            }
+
+            if (m_kinDyn->model().getJoint(index)->getNrOfDOFs() != 1)
+            {
+                BiomechanicalAnalysis::log()->error("[HumanIK::initializeJointRegularizationTask] "
+                                                    "Joint {} has a number of dofs different from 1",
+                                                    jointsList[i]);
+                return false;
+            }
+            auto dofOffset = m_kinDyn->model().getJoint(index)->getDOFsOffset();
+            weightVector[dofOffset] = Jointsweights[i];
+        }
+    }
 
     // Add the joint regularization task to the QP solver with the specified weight vector
     ok = ok && m_qpIK.addTask(m_jointRegularizationTask, taskName, 1, weightVector);
